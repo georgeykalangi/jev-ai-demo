@@ -1,7 +1,8 @@
 """Minimal Jev client: one POST, standard library only.
 
-Live mode:    set TYPESAFE_API_KEY and requests go to the TypeSafe API.
-Offline mode: no key set, so a recorded response from fixtures/ is replayed.
+Live mode:    TYPESAFE_API_KEY is set (in the environment or in .env), so
+              requests go to the TypeSafe API.
+Offline mode: no key found, so a recorded response from fixtures/ is replayed.
 """
 
 import json
@@ -14,15 +15,30 @@ API_URL = "https://api.typesafe.ai/v1/systemone"
 DEFAULT_MODEL = "jev-latest"
 API_KEY_ENV = "TYPESAFE_API_KEY"
 REQUEST_TIMEOUT_SECONDS = 30
-FIXTURES_DIR = Path(__file__).resolve().parent.parent / "fixtures"
+REPO_ROOT = Path(__file__).resolve().parent.parent
+FIXTURES_DIR = REPO_ROOT / "fixtures"
+ENV_FILE = REPO_ROOT / ".env"
 
 
 class JevError(RuntimeError):
     """Raised when the Jev API returns an error or cannot be reached."""
 
 
+def api_key() -> str | None:
+    """TYPESAFE_API_KEY from the environment, falling back to the .env file."""
+    if os.environ.get(API_KEY_ENV):
+        return os.environ[API_KEY_ENV]
+    if not ENV_FILE.exists():
+        return None
+    for line in ENV_FILE.read_text().splitlines():
+        name, _, value = line.partition("=")
+        if name.strip() == API_KEY_ENV and value.strip():
+            return value.strip().strip("'\"")
+    return None
+
+
 def is_live() -> bool:
-    return bool(os.environ.get(API_KEY_ENV))
+    return api_key() is not None
 
 
 def build_request(state: str | dict, questions: dict, model: str = DEFAULT_MODEL) -> dict:
@@ -36,8 +52,9 @@ def ask(state: str | dict, questions: dict, fixture: str | None = None) -> dict:
     `fixture` names the recorded response to replay when no API key is set.
     """
     body = build_request(state, questions)
-    if is_live():
-        response = _post(body, os.environ[API_KEY_ENV])
+    key = api_key()
+    if key:
+        response = _post(body, key)
     elif fixture:
         response = load_fixture(fixture)
     else:
@@ -52,11 +69,11 @@ def load_fixture(name: str) -> dict:
     return json.loads(path.read_text())["response"]
 
 
-def _post(body: dict, api_key: str) -> dict:
+def _post(body: dict, key: str) -> dict:
     request = urllib.request.Request(
         API_URL,
         data=json.dumps(body).encode(),
-        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
         method="POST",
     )
     try:
